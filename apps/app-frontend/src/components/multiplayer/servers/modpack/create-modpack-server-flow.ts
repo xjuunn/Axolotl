@@ -167,7 +167,11 @@ export function createModpackServerFlowContext(
 		availableGameVersions.value = gameVersion ? [gameVersion] : []
 		loaderSupported.value = SUPPORTED_MODPACK_LOADERS.includes(loader.type)
 
-		name.value = packProject.title
+		// Default the server name to `<modpack title> <version number>` so different
+		// versions of the same modpack produce distinct server names instead of
+		// colliding.  A short uid is appended only if a name collision remains
+		// (see beginInstall), mirroring the direct-server id style.
+		name.value = `${packProject.title} ${packVersion.version_number ?? ''}`.trim()
 		selectedLoaderVersion.value = ''
 		loaderVersions.value = []
 	}
@@ -264,8 +268,24 @@ export function createModpackServerFlowContext(
 			}
 
 			if (!createdServer.value) {
+				// Ensure the chosen name is unique among existing servers.  When it
+				// collides we append a short uid (mirroring the direct-server id
+				// style) so duplicate modpack versions stay distinguishable; if the
+				// name is free, no suffix is added.
+				let finalName = name.value.trim()
+				try {
+					const existing = await servers.list()
+					const taken = new Set(existing.map((server) => server.name.trim().toLowerCase()))
+					if (taken.has(finalName.toLowerCase())) {
+						const uid = Math.random().toString(36).slice(2, 6)
+						finalName = `${finalName} ${uid}`
+					}
+				} catch {
+					// Best-effort uniqueness; the backend id already disambiguates.
+				}
+
 				const manifest = await servers.create({
-					name: name.value,
+					name: finalName,
 					serverType: serverType.value,
 					gameVersion: selectedGameVersion.value,
 					loaderVersion: needsLoaderVersion.value ? selectedLoaderVersion.value : undefined,
@@ -335,7 +355,7 @@ export function createModpackServerFlowContext(
 						javaPath: selectedJava.value.path || undefined,
 						modpackProjectId: project.value.id,
 						modpackVersionId: version.value.id,
-						modpackTitle: modpackTitle.value,
+						modpackTitle: `${modpackTitle.value} ${modpackVersionNumber.value}`.trim(),
 						modpackIconUrl: modpackIconUrl.value,
 					},
 					downloadManager,

@@ -4,7 +4,7 @@
 
 <script setup lang="ts">
 import * as THREE from 'three'
-import { type GLTF,GLTFLoader } from 'three/examples/jsm/Addons.js'
+import { type GLTF, GLTFLoader } from 'three/examples/jsm/Addons.js'
 import { onMounted, onScopeDispose, useTemplateRef } from 'vue'
 
 import { useTheming } from '@/store/theme'
@@ -173,6 +173,8 @@ function main() {
 	const canvas = document.querySelector<HTMLCanvasElement>('#about_scene')
 	if (!canvas) return console.error('No canvas')
 
+	let isUpdating = true
+
 	const canvasSize = new THREE.Vector2(
 		canvas.getBoundingClientRect().width,
 		canvas.getBoundingClientRect().height,
@@ -255,7 +257,7 @@ function main() {
 			mixer.update(deltaTime)
 		}
 	}
-	let updateGLTF = (deltaTime: number, elapsedTime: number) => {}
+	let updateGLTF = (_deltaTime: number, _elapsedTime: number) => {}
 	load().then((updateFn) => {
 		if (updateFn) updateGLTF = updateFn
 	})
@@ -290,7 +292,7 @@ function main() {
 		}
 	}
 
-	function animate(time: number) {
+	function animate(_time: number) {
 		if (isUpdating === false) return
 		requestAnimationFrame(animate)
 
@@ -318,7 +320,6 @@ function main() {
 		camera.position.copy(newPosition)
 	}
 
-	var isUpdating = true
 	function updateSize() {
 		if (!isUpdating) return
 		if (!canvas) return

@@ -5969,6 +5969,9 @@
   "app.project.versions.already-installed": {
     "message": "已安装"
   },
+  "app.project.versions.start-server": {
+    "message": "开服"
+  },
   "app.restarting": {
     "message": "正在重启……"
   },
@@ -9931,5 +9934,32 @@
   },
   "unknown-pack-warning-modal.warning.title": {
     "message": "未知文件警告"
+  },
+  "app.servers.eula.accept": {
+    "message": "同意并继续"
+  },
+  "app.settings.about.game.completed": {
+    "message": "彩虹美西螈！"
+  },
+  "app.settings.about.game.exit": {
+    "message": "退出游戏"
+  },
+  "app.settings.about.game.game-over": {
+    "message": "潮水上涨了！"
+  },
+  "app.settings.about.game.highest-level": {
+    "message": "最高等级：{level}"
+  },
+  "app.settings.about.game.restart": {
+    "message": "重新开始"
+  },
+  "app.settings.about.game.score": {
+    "message": "分数：{score}"
+  },
+  "app.settings.about.game.tap-to-drop": {
+    "message": "点击场地，投放粉色美西螈"
+  },
+  "app.settings.about.game.title": {
+    "message": "合成美西螈"
   }
 }
