@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircleIcon, SpinnerIcon } from '@modrinth/assets'
-import { Admonition, defineMessages, ProgressBar, useVIntl } from '@modrinth/ui'
+import { Admonition, defineMessages, EnvironmentTags, ProgressBar, useVIntl } from '@modrinth/ui'
 import { computed, onMounted } from 'vue'
 
 import { injectCreateServerFlow } from '../../create-server-flow'
@@ -24,9 +24,14 @@ const messages = defineMessages({
 		id: 'app.servers.modpack.current-file',
 		defaultMessage: 'Now installing {file}',
 	},
-	backgroundHint: {
-		id: 'app.servers.modpack.background-hint',
-		defaultMessage: 'You can close this window — the download continues in the background.',
+	excludedModsTitle: {
+		id: 'app.servers.modpack.excluded-client-mods.title',
+		defaultMessage: 'Excluded client-only mods',
+	},
+	excludedModsBody: {
+		id: 'app.servers.modpack.excluded-client-mods.body',
+		defaultMessage:
+			'These mods do not support dedicated servers, so they were skipped to let the server start.',
 	},
 })
 
@@ -63,11 +68,29 @@ const currentFile = computed(() => {
 	return match ?? null
 })
 
+// Mods the backend excluded because their Modrinth project reports
+// `server_side = "unsupported"`. The log line is emitted by the server installer.
+const excludedMods = computed(() => {
+	return [
+		...new Set(
+			ctx.installLog.value
+				.map(
+					(line) =>
+						/^Excluding (.+?): not supported on dedicated servers$/.exec(line)?.[1],
+				)
+				.filter(Boolean) as string[],
+		),
+	]
+})
+
 const isBusy = computed(
 	() =>
 		ctx.installPhase.value === 'preparing' ||
 		ctx.installPhase.value === 'downloading',
 )
+
+// v3 environment enum value used to label client-only mods excluded from the server.
+const clientOnlyEnvironment = 'client_only' as const
 </script>
 
 <template>
@@ -98,12 +121,23 @@ const isBusy = computed(
 			{{ formatMessage(messages.currentFile, { file: currentFile }) }}
 		</p>
 
-		<p
-			v-if="ctx.installPhase.value === 'downloading'"
-			class="m-0 text-xs font-medium text-secondary"
+		<Admonition
+			v-if="excludedMods.length > 0"
+			type="warning"
+			:header="formatMessage(messages.excludedModsTitle)"
 		>
-			{{ formatMessage(messages.backgroundHint) }}
-		</p>
+			<p class="m-0">{{ formatMessage(messages.excludedModsBody) }}</p>
+			<ul class="mb-0 mt-2 flex list-none flex-col gap-1 p-0">
+				<li
+					v-for="mod in excludedMods"
+					:key="mod"
+					class="flex min-w-0 items-center gap-2"
+				>
+					<EnvironmentTags :environment="clientOnlyEnvironment" />
+					<span class="min-w-0 truncate font-medium text-contrast">{{ mod }}</span>
+				</li>
+			</ul>
+		</Admonition>
 
 		<Admonition
 			v-if="ctx.installPhase.value === 'error'"

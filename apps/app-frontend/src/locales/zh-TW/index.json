@@ -6266,9 +6266,6 @@
   "app.servers.status.starting": {
     "message": "啟動中"
   },
-  "app.servers.wizard.background-hint": {
-    "message": "您可以關閉此視窗，下載將在背景繼續進行。"
-  },
   "app.servers.wizard.configure-heading": {
     "message": "調整伺服器設定，或直接完成，稍後再編輯。"
   },
@@ -6350,6 +6347,12 @@
   "app.servers.modpack.downloading": {
     "message": "正在下載整合包檔案..."
   },
+  "app.servers.modpack.excluded-client-mods.title": {
+    "message": "已排除僅用戶端的模組"
+  },
+  "app.servers.modpack.excluded-client-mods.body": {
+    "message": "這些模組不支援專用伺服器，因此已略過，以便伺服器正常啟動。"
+  },
   "app.servers.modpack.preparing": {
     "message": "正在準備伺服器..."
   },
@@ -6358,9 +6361,6 @@
   },
   "app.servers.modpack.current-file": {
     "message": "正在安裝 {file}"
-  },
-  "app.servers.modpack.background-hint": {
-    "message": "您可以關閉此視窗，下載將在背景持續進行。"
   },
   "app.servers.modpack.first-run-crashed": {
     "message": "伺服器在首次啟動時當機。請檢查所選 Java 版本是否相容，然後重試。"

@@ -6443,9 +6443,6 @@
   "app.servers.status.starting": {
     "message": "启动中"
   },
-  "app.servers.wizard.background-hint": {
-    "message": "您可以关闭此窗口，下载将在后台继续进行。"
-  },
   "app.servers.wizard.configure-heading": {
     "message": "调整服务器设置，或直接完成，稍后再编辑。"
   },
@@ -6527,9 +6524,6 @@
   "app.servers.type.forge": {
     "message": "Forge"
   },
-  "app.servers.modpack.background-hint": {
-    "message": "您可以关闭此窗口，下载将在后台继续进行。"
-  },
   "app.servers.modpack.current-file": {
     "message": "正在安装 {file}"
   },
@@ -6538,6 +6532,12 @@
   },
   "app.servers.modpack.downloading": {
     "message": "正在下载整合包文件..."
+  },
+  "app.servers.modpack.excluded-client-mods.title": {
+    "message": "已排除仅客户端的模组"
+  },
+  "app.servers.modpack.excluded-client-mods.body": {
+    "message": "这些模组不支持专用服务器，因此已被跳过，以便服务器正常启动。"
   },
   "app.servers.modpack.first-run-crashed": {
     "message": "服务器在首次启动时崩溃。请检查所选 Java 版本是否兼容，然后重试。"

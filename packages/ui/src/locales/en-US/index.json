@@ -678,7 +678,7 @@
     "defaultMessage": "Click the start button to start the server!"
   },
   "console.empty.server-title": {
-    "defaultMessage": "Welcome to your Modrinth server!"
+    "defaultMessage": "Welcome to your Axolotl server!"
   },
   "console.filter.error": {
     "defaultMessage": "Error"

@@ -19,16 +19,19 @@ pub(crate) struct ModsToml {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ModsTomlEntry {
-    pub mod_id: Option<String>,
-    pub display_name: Option<String>,
-    pub version: Option<String>,
-    pub description: Option<String>,
-    pub authors: Option<String>,
-    pub logo_file: Option<String>,
-    #[serde(alias = "displayURL")]
-    pub display_url: Option<String>,
-    #[allow(dead_code)]
-    pub credits: Option<String>,
+	pub mod_id: Option<String>,
+	pub display_name: Option<String>,
+	pub version: Option<String>,
+	pub description: Option<String>,
+	pub authors: Option<String>,
+	pub logo_file: Option<String>,
+	#[serde(alias = "displayURL")]
+	pub display_url: Option<String>,
+	#[allow(dead_code)]
+	pub credits: Option<String>,
+	/// `side = "CLIENT"` marks a mod that must never run on a dedicated server.
+	/// Defaults to `BOTH` when absent.
+	pub side: Option<String>,
 }
 
 /// An entry in a Forge/NeoForge `[[dependencies.<modId>]]` array.

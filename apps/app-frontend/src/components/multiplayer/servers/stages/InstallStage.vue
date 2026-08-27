@@ -21,10 +21,6 @@ const ctx = injectCreateServerFlow()
 		done: { id: 'app.servers.wizard.done', defaultMessage: 'Server ready' },
 		failed: { id: 'app.servers.wizard.failed', defaultMessage: 'Setup failed' },
 		installLog: { id: 'app.servers.wizard.log', defaultMessage: 'Output' },
-		backgroundHint: {
-			id: 'app.servers.wizard.background-hint',
-			defaultMessage: 'You can close this window — the download continues in the background.',
-		},
 	})
 
 onMounted(() => {
@@ -82,13 +78,6 @@ const isBusy = computed(
 			:label="formatMessage(messages.downloading)"
 			show-progress
 		/>
-
-		<p
-			v-if="ctx.installPhase.value === 'downloading'"
-			class="m-0 text-xs font-medium text-secondary"
-		>
-			{{ formatMessage(messages.backgroundHint) }}
-		</p>
 
 		<Admonition
 			v-if="ctx.installPhase.value === 'error'"

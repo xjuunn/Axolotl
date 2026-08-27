@@ -63,7 +63,7 @@ const MODPACK_SERVER_TYPES: Record<string, { type: ServerTypeId; label: string }
 }
 
 /** Loaders whose server launcher the app can download and boot directly. */
-const SUPPORTED_MODPACK_LOADERS: ServerTypeId[] = ['vanilla', 'fabric', 'quilt']
+const SUPPORTED_MODPACK_LOADERS: ServerTypeId[] = ['vanilla', 'fabric', 'quilt', 'forge']
 
 export function resolveModpackLoader(loaders: string[]): { type: ServerTypeId; label: string } {
 	for (const loader of loaders) {
@@ -318,27 +318,28 @@ export function createModpackServerFlowContext(
 					throw new Error('Modpack has no downloadable file')
 				}
 
-			// The download runs through the shared background runner, so closing
-			// the wizard keeps it going; progress renders from the shared registry.
-			dispatched = true
-			installPhase.value = 'downloading'
-			// [SERVER-DOWNLOAD-BRIDGE] Pass the download manager reference
-			// captured during setup so the synthetic job appears in sidebar.
-			await startModpackServerInstall(
-				serverId,
-				{
-					mrpackUrl: primaryFile.url,
-					mrpackSha1: primaryFile.hashes?.sha1,
-					jarUrl: jar.url,
-					jarFilename: jar.filename,
-					jarSha1: jar.sha1,
-					modpackProjectId: project.value.id,
-					modpackVersionId: version.value.id,
-					modpackTitle: modpackTitle.value,
-					modpackIconUrl: modpackIconUrl.value,
-				},
-				downloadManager,
-			)
+				// The download runs through the shared background runner, so closing
+				// the wizard keeps it going; progress renders from the shared registry.
+				dispatched = true
+				installPhase.value = 'downloading'
+				// [SERVER-DOWNLOAD-BRIDGE] Pass the download manager reference
+				// captured during setup so the synthetic job appears in sidebar.
+				await startModpackServerInstall(
+					serverId,
+					{
+						mrpackUrl: primaryFile.url,
+						mrpackSha1: primaryFile.hashes?.sha1,
+						jarUrl: jar.url,
+						jarFilename: jar.filename,
+						jarSha1: jar.sha1,
+						javaPath: selectedJava.value.path || undefined,
+						modpackProjectId: project.value.id,
+						modpackVersionId: version.value.id,
+						modpackTitle: modpackTitle.value,
+						modpackIconUrl: modpackIconUrl.value,
+					},
+					downloadManager,
+				)
 				if (isStale()) return
 
 				// Modpack installation complete, no auto-start.

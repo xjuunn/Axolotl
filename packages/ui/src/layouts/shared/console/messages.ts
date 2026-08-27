@@ -18,7 +18,7 @@ export const consoleMessages = defineMessages({
 	},
 	emptyServerTitle: {
 		id: 'console.empty.server-title',
-		defaultMessage: 'Welcome to your Modrinth server!',
+		defaultMessage: 'Welcome to your Axolotl server!',
 	},
 	emptyServerDescription: {
 		id: 'console.empty.server-description',

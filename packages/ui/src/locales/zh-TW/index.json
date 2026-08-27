@@ -4107,7 +4107,7 @@
     "defaultMessage": "點選右上角「開始遊戲」即可接收實時日誌"
   },
   "console.empty.server-title": {
-    "defaultMessage": "歡迎使用 Modrinth 伺服器！"
+    "defaultMessage": "歡迎使用 Axolotl 伺服器！"
   },
   "console.empty.server-description": {
     "defaultMessage": "點選啟動按鈕即可啟動伺服器！"

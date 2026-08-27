@@ -1,6 +1,8 @@
 import {
 	type FabricInstallerVersionsResponse,
 	fabricInstallerVersionsUrl,
+	FORGE_MAVEN_URL,
+	forgePromotionsSlimUrl,
 	latestStablePaperBuild,
 	type PaperBuildsResponse,
 	paperBuildsUrl,
@@ -128,6 +130,20 @@ export async function resolveServerLauncher(
 			const build = latestStablePaperBuild(builds)
 			if (!build) return null
 			return resolveServerJar(type, { gameVersion, paperBuild: build })
+		}
+		case 'forge': {
+			// The Forge "launcher" is the installer jar; the backend runs it
+			// headlessly (`--installServer`) to materialize the server files.
+			const promos = await fetchJson<{ promos: Record<string, string> }>(forgePromotionsSlimUrl())
+			const build =
+				promos.promos[`${gameVersion}-recommended`] ?? promos.promos[`${gameVersion}-latest`]
+			if (!build) return null
+			const filename = `forge-${gameVersion}-${build}-installer.jar`
+			return {
+				url: `${FORGE_MAVEN_URL}/${gameVersion}-${build}/${filename}`,
+				filename,
+				sha1: undefined,
+			}
 		}
 		default:
 			return null

@@ -12,13 +12,16 @@ use std::future::Future;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::process::Command;
 
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 
 use crate::State;
+use crate::state::{CachedEntry, CacheBehaviour, ModrinthProjectId, SideType};
 use crate::api::pack::archive_util::{
     extract_archive_subdir, read_archive_entry_to_string,
 };
@@ -169,6 +172,7 @@ pub async fn install_modpack(
     jar_url: &str,
     jar_filename: &str,
     jar_sha1: Option<String>,
+    java_path: Option<String>,
     modpack_project_id: Option<String>,
     modpack_version_id: Option<String>,
     modpack_title: Option<String>,
@@ -178,6 +182,10 @@ pub async fn install_modpack(
     let mut manifest = read_manifest(&dir).await?;
     manifest.install_state = Some(InstallState::Incomplete);
     manifest.install_error = None;
+    // Forge modpacks carry the installer jar as the launcher; the backend runs
+    // it headlessly to materialize the server files, and `servers.start` already
+    // boots Forge via `libraries/net/minecraftforge/forge/*/unix_args.txt`.
+    let is_forge = manifest.server_type == "forge";
     // Record the source pack before any bytes move so an interrupted install
     // still carries everything the resume flow needs.
     if let (Some(project_id), Some(version_id), Some(title)) =
@@ -210,13 +218,19 @@ pub async fn install_modpack(
         jar_url,
         jar_filename,
         jar_sha1.as_deref(),
+        is_forge,
+        java_path.clone(),
     )
     .await;
 
     let mut manifest = read_manifest(&dir).await?;
     match result {
         Ok(()) => {
-            manifest.jar_name = Some(jar_filename.to_string());
+            // Forge servers boot via the installer-produced launch args, not a
+            // single launcher jar, so leave `jar_name` unset for them.
+            if !is_forge {
+                manifest.jar_name = Some(jar_filename.to_string());
+            }
             // Icon was already downloaded at the start; only download if still missing
             if manifest.icon_path.is_none() {
                 if let Some(icon_url) = modpack_icon_url.as_deref() {
@@ -263,6 +277,8 @@ async fn run_modpack_install(
     jar_url: &str,
     jar_filename: &str,
     jar_sha1: Option<&str>,
+    is_forge: bool,
+    java_path: Option<String>,
 ) -> Result<()> {
     let state = State::get().await?;
 
@@ -283,13 +299,41 @@ async fn run_modpack_install(
     let base_folder = base_folder(&manifest_entry);
     let index = parse_index(&archive_path, &manifest_entry).await?;
 
-    let (installable_files, excluded_files): (
-        Vec<&MrpackFile>,
-        Vec<&MrpackFile>,
-    ) = index
+    let mut installable_files: Vec<MrpackFile> = index
         .files
         .iter()
-        .partition(|file| is_server_installable(file));
+        .filter(|file| is_server_installable(file))
+        .cloned()
+        .collect();
+    let mut excluded_files: Vec<MrpackFile> = index
+        .files
+        .iter()
+        .filter(|file| !is_server_installable(file))
+        .cloned()
+        .collect();
+
+    // A pack's index sometimes marks a client-only mod as server-installable in
+    // its `env` field (or omits `env` entirely), so the static `env` filter
+    // above keeps it. The authoritative Modrinth project metadata declares the
+    // real server support, so re-classify any installable Modrinth mod whose
+    // project reports `server_side = "unsupported"` as excluded.
+    let server_unsupported =
+        resolve_server_unsupported_mods(server_id, &state, &installable_files).await?;
+    if !server_unsupported.is_empty() {
+        let mut moved = Vec::new();
+        installable_files.retain(|file| {
+            let path = file.path.replace('\\', "/");
+            let filename = path.rsplit('/').next().unwrap_or(&path);
+            if server_unsupported.contains(filename) {
+                moved.push(file.clone());
+                false
+            } else {
+                true
+            }
+        });
+        excluded_files.extend(moved);
+    }
+
     let total_bytes: u64 = installable_files
         .iter()
         .filter_map(|file| file.file_size)
@@ -396,6 +440,11 @@ async fn run_modpack_install(
 
     prune_uninstallable_mods(server_id, dir, &unavailable_ids, &explicitly_server_installable).await?;
 
+    // Forge/NeoForge client-only mods (declared `side = "CLIENT"` in
+    // `mods.toml`) are not caught by the Fabric-metadata pruning pass above; they
+    // must be removed so a dedicated server can boot (see `is_client_only_forge_mod_path`).
+    prune_client_only_forge_mods(server_id, dir).await?;
+
     log(
         &server_id,
         &format!("Downloading server launcher ({jar_filename})"),
@@ -420,6 +469,45 @@ async fn run_modpack_install(
         jar_sha1.map(str::to_string),
     )
     .await?;
+
+    if is_forge {
+        // The Forge "launcher" is the installer; run it headlessly into the
+        // server directory so the regular `servers.start` flow can boot it.
+        let installer_path = dir.join(jar_filename);
+        let java = java_path.clone().unwrap_or_else(|| "java".to_string());
+        log(
+            server_id,
+            "Running Forge installer (this may take a while)",
+        )
+        .await?;
+        let output = Command::new(&java)
+            .arg("-jar")
+            .arg(&installer_path)
+            .arg("--installServer")
+            .arg(dir)
+            .current_dir(dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .map_err(|e| {
+                ErrorKind::LauncherError(format!("Failed to run Forge installer: {e}")).as_error()
+            })?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stderr.lines().rev().take(20) {
+            log(server_id, line).await.ok();
+        }
+
+        if !output.status.success() {
+            return Err(ErrorKind::LauncherError(
+                "Forge installer failed. Check that the selected Java version supports this game version."
+                    .to_string(),
+            )
+            .as_error());
+        }
+        log(server_id, "Forge server files installed").await.ok();
+    }
 
     Ok(())
 }
@@ -538,6 +626,83 @@ fn is_server_installable(file: &MrpackFile) -> bool {
         .any(|prefix| path.starts_with(prefix))
 }
 
+/// Extracts the Modrinth project id from a CDN download URL of the form
+/// `https://cdn(.alt).modrinth.com/data/{project_id}/versions/{version_id}/{file}`.
+fn modrinth_project_id_from_url(url: Option<&String>) -> Option<String> {
+    let url = url?;
+    let rest = url.split("/data/").nth(1)?;
+    rest.split('/').next().map(str::to_string)
+}
+
+/// Returns the filenames (relative to `mods/`) of installable mod jars whose
+/// Modrinth project declares `server_side = "unsupported"`. The pack index
+/// `env` field is author-supplied and sometimes wrong, so the authoritative
+/// project metadata decides whether a mod belongs on a dedicated server.
+async fn resolve_server_unsupported_mods(
+    server_id: &str,
+    state: &State,
+    installable_files: &[MrpackFile],
+) -> Result<HashSet<String>> {
+    let mut id_to_filename: HashMap<String, String> = HashMap::new();
+    for file in installable_files {
+        let path = file.path.replace('\\', "/");
+        if !path.starts_with("mods/") || !path.to_ascii_lowercase().ends_with(".jar") {
+            continue;
+        }
+        if let Some(project_id) = modrinth_project_id_from_url(file.downloads.first()) {
+            let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
+            id_to_filename.insert(project_id, filename);
+        }
+    }
+    if id_to_filename.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let ids: Vec<ModrinthProjectId> = id_to_filename
+        .keys()
+        .filter_map(|id| ModrinthProjectId::new(id.clone()).ok())
+        .collect();
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let projects = match CachedEntry::get_project_many(
+        &ids,
+        Some(CacheBehaviour::StaleWhileRevalidate),
+        &state.pool,
+        &state.fetch_semaphore,
+    )
+    .await
+    {
+        Ok(projects) => projects,
+        Err(error) => {
+            log(
+                server_id,
+                &format!("Could not verify mod server support: {error}"),
+            )
+            .await
+            .ok();
+            return Ok(HashSet::new());
+        }
+    };
+
+    let mut unsupported = HashSet::new();
+    for project in projects {
+        if project.server_side == SideType::Unsupported {
+            if let Some(filename) = id_to_filename.get(&project.id) {
+                log(
+                    server_id,
+                    &format!("Excluding {filename}: not supported on dedicated servers"),
+                )
+                .await
+                .ok();
+                unsupported.insert(filename.clone());
+            }
+        }
+    }
+    Ok(unsupported)
+}
+
 /// Removes client-only folders (see [`CLIENT_ONLY_OVERRIDE_DIRS`]) that came
 /// along with the modpack's overrides; the `env` filtering applied to files
 /// listed in `modrinth.index.json` does not cover override contents.
@@ -569,7 +734,7 @@ async fn remove_client_only_dirs(server_id: &str, dir: &Path) -> Result<()> {
 async fn fetch_excluded_mod_ids(
     server_id: &str,
     state: &State,
-    excluded_files: &[&MrpackFile],
+    excluded_files: &[MrpackFile],
 ) -> Result<HashSet<String>> {
     let candidates: Vec<(String, String, Option<String>)> = excluded_files
         .iter()
@@ -686,6 +851,63 @@ async fn prune_uninstallable_mods(
         )
         .await
         .ok();
+        tokio::fs::remove_file(&path)
+            .await
+            .map_err(|e| IOError::with_path(e, &path))?;
+    }
+    Ok(())
+}
+
+/// Removes Forge/NeoForge mods declared client-only (`side = "CLIENT"`) from
+/// the server's `mods/` directory. A dedicated server cannot load client-only
+/// mods: Forge's `RuntimeDistCleaner` rejects any class referencing
+/// `net.minecraft.client.*`, and a client coremod transformer can crash startup
+/// before Forge even decides whether to load the mod. These mods are not caught
+/// by [`prune_uninstallable_mods`], which only inspects Fabric metadata.
+async fn prune_client_only_forge_mods(server_id: &str, dir: &Path) -> Result<()> {
+    let mods_dir = dir.join("mods");
+    if !mods_dir.is_dir() {
+        return Ok(());
+    }
+
+    let to_remove: Vec<PathBuf> = tokio::task::spawn_blocking({
+        let mods_dir = mods_dir.clone();
+        move || {
+            let mut found = Vec::new();
+            let mut stack = vec![mods_dir];
+            while let Some(current) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&current) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+                        && crate::mod_metadata::is_client_only_forge_mod_path(&path)
+                    {
+                        found.push(path);
+                    }
+                }
+            }
+            found
+        }
+    })
+    .await
+    .map_err(|e| {
+        ErrorKind::FSError(format!("Failed to scan mods for client-only Forge mods: {e}")).as_error()
+    })?;
+
+    for path in to_remove {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        log(server_id, &format!("Removed client-only Forge mod {name}"))
+            .await
+            .ok();
         tokio::fs::remove_file(&path)
             .await
             .map_err(|e| IOError::with_path(e, &path))?;
@@ -1154,6 +1376,46 @@ mod tests {
 
         assert!(!shaders.exists());
         assert!(mods.exists());
+    }
+
+    #[tokio::test]
+    async fn client_only_forge_mods_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mods = dir.path().join("mods");
+        tokio::fs::create_dir_all(&mods).await.unwrap();
+
+        // Client-only Forge mod (ETF-style): must be removed on a server.
+        create_jar(
+            &mods.join("etf.jar"),
+            &[(
+                "META-INF/mods.toml",
+                "[[mods]]\nmodId = \"etf\"\ndisplayName = \"ETF\"\nside = \"CLIENT\"\n",
+            )],
+        );
+        // Dual-side Forge mod: must be kept.
+        create_jar(
+            &mods.join("sodium.jar"),
+            &[(
+                "META-INF/mods.toml",
+                "[[mods]]\nmodId = \"sodium\"\ndisplayName = \"Sodium\"\nside = \"BOTH\"\n",
+            )],
+        );
+        // Forge mod without a side declaration defaults to both: must be kept.
+        create_jar(
+            &mods.join("default.jar"),
+            &[(
+                "META-INF/mods.toml",
+                "[[mods]]\nmodId = \"default\"\ndisplayName = \"Default\"\n",
+            )],
+        );
+
+        prune_client_only_forge_mods("test-server", dir.path())
+            .await
+            .unwrap();
+
+        assert!(!mods.join("etf.jar").exists());
+        assert!(mods.join("sodium.jar").exists());
+        assert!(mods.join("default.jar").exists());
     }
 
     #[tokio::test]

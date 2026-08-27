@@ -2,6 +2,8 @@ export * from './server'
 
 // Other
 export { default as ProjectCard } from './card/ProjectCard.vue'
+export { getEnvironmentTags } from './environments'
+export { default as EnvironmentTags } from './EnvironmentTags.vue'
 export { default as ProjectBackgroundGradient } from './ProjectBackgroundGradient.vue'
 export { default as ProjectCardList } from './ProjectCardList.vue'
 export { default as ProjectCombobox } from './ProjectCombobox.vue'

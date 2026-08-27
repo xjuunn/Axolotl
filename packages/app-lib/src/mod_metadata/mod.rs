@@ -17,6 +17,7 @@ mod toml_mod;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Unified local mod metadata extracted from inside a JAR.
 ///
@@ -104,6 +105,91 @@ pub fn extract_mod_metadata(bytes: &Bytes) -> Option<LocalModMetadata> {
     }
 
     None
+}
+
+/// Returns true when the JAR at `path` contains a Forge/NeoForge mod that must
+/// not be installed on a dedicated server.
+///
+/// A mod is flagged when any of:
+/// - it declares `side = "CLIENT"` on a `[[mods]]` entry in `mods.toml` /
+///   `neoforge.mods.toml`;
+/// - it only depends on `minecraft`/`forge` with `side = "CLIENT"`, which means
+///   it is a client-only mod whose mixins reference `net.minecraft.client.*` and
+///   crash a dedicated server (e.g. Entity Texture Features); or
+/// - it registers an FML coremod / ModLauncher transformer plugin
+///   (`META-INF/services/cpw.mods.modlauncher.api.ITransformer` or the legacy
+///   `META-INF/coremods.json`).
+///
+/// Mixin-only mods that are genuinely server-safe (e.g. ModernFix, NoChatReports'
+/// server mixin) are NOT flagged by the first two rules, so they are kept.
+pub fn is_client_only_forge_mod_path(path: &Path) -> bool {
+	let Ok(bytes) = std::fs::read(path) else {
+		return false;
+	};
+	is_client_only_forge_mod(&bytes::Bytes::from(bytes))
+}
+
+/// In-memory variant of [`is_client_only_forge_mod_path`].
+pub(crate) fn is_client_only_forge_mod(bytes: &bytes::Bytes) -> bool {
+	let cursor = std::io::Cursor::new(&**bytes);
+	let mut archive = match zip::ZipArchive::new(cursor) {
+		Ok(archive) => archive,
+		Err(_) => return false,
+	};
+	for path in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
+		let mut content = String::new();
+		{
+			let Ok(mut file) = archive.by_name(path) else {
+				continue;
+			};
+			if std::io::Read::read_to_string(&mut file, &mut content).is_err() {
+				continue;
+			}
+		}
+		if let Ok(parsed) = toml::from_str::<toml_mod::ModsToml>(&content) {
+			if let Some(mods) = parsed.mods {
+				if mods.iter().any(|entry| {
+					entry
+						.side
+						.as_deref()
+						.is_some_and(|side| side.eq_ignore_ascii_case("CLIENT"))
+				}) {
+					return true;
+				}
+			}
+			// A mod that only depends on `minecraft` / `forge` on the client side
+			// is effectively client-only. Its author may still declare
+			// `env.server: "required"` or leave the `[[mods]]` `side` as `BOTH`,
+			// but Forge loads it on a dedicated server where its mixins reference
+			// `net.minecraft.client.*` and crash the JVM (e.g. Entity Texture
+			// Features' `etf$illegalPathOverride` on `ResourceLocation`). Such
+			// mods must be removed from a server install.
+			if let Some(deps) = parsed.dependencies {
+				let has_client_game_dependency = deps.values().flatten().any(|dep| {
+					dep.mod_id.as_deref().is_some_and(|id| {
+						id.eq_ignore_ascii_case("minecraft")
+							|| id.eq_ignore_ascii_case("forge")
+							|| id.eq_ignore_ascii_case("neoforge")
+					}) && dep
+						.side
+						.as_deref()
+						.is_some_and(|side| side.eq_ignore_ascii_case("CLIENT"))
+				});
+				if has_client_game_dependency {
+					return true;
+				}
+			}
+		}
+	}
+
+	// A mod that registers an FML coremod / ModLauncher transformer executes its
+	// bytecode hooks on every class load and crashes the dedicated server when
+	// those hooks reference client-only classes. Forge still loads it even when
+	// the mod's `side` is `BOTH`, so it must be removed from a server.
+	let has_transformer_plugin =
+		archive.by_name("META-INF/services/cpw.mods.modlauncher.api.ITransformer").is_ok();
+	let has_legacy_coremod = archive.by_name("META-INF/coremods.json").is_ok();
+	has_transformer_plugin || has_legacy_coremod
 }
 
 // ── format-specific parsers ────────────────────────────────────────────────
@@ -405,5 +491,97 @@ mod tests {
 
         let meta = super::extract_mod_metadata(&jar).expect("mod metadata");
         assert_eq!(meta.version.as_deref(), Some("${file.jarVersion}"));
+    }
+
+    #[test]
+    fn forge_mod_declared_client_side_is_detected() {
+        let jar = build_jar(&[(
+            "META-INF/mods.toml",
+            "[[mods]]\nmodId = \"etf\"\ndisplayName = \"ETF\"\nside = \"CLIENT\"\n",
+        )]);
+        assert!(super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_with_both_side_is_not_client_only() {
+        let jar = build_jar(&[(
+            "META-INF/mods.toml",
+            "[[mods]]\nmodId = \"sodium\"\ndisplayName = \"Sodium\"\nside = \"BOTH\"\n",
+        )]);
+        assert!(!super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_without_side_is_not_client_only() {
+        let jar = build_jar(&[(
+            "META-INF/mods.toml",
+            "[[mods]]\nmodId = \"sodium\"\ndisplayName = \"Sodium\"\n",
+        )]);
+        assert!(!super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_with_transformer_plugin_is_detected() {
+        let jar = build_jar(&[
+            (
+                "META-INF/mods.toml",
+                "[[mods]]\nmodId = \"etf\"\ndisplayName = \"ETF\"\nside = \"BOTH\"\n",
+            ),
+            (
+                "META-INF/services/cpw.mods.modlauncher.api.ITransformer",
+                "com.example.etf.Transformer\n",
+            ),
+        ]);
+        assert!(super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_with_legacy_coremod_is_detected() {
+        let jar = build_jar(&[
+            (
+                "META-INF/mods.toml",
+                "[[mods]]\nmodId = \"etf\"\ndisplayName = \"ETF\"\nside = \"BOTH\"\n",
+            ),
+            ("META-INF/coremods.json", "{}\n"),
+        ]);
+        assert!(super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_with_mixin_only_is_not_client_only() {
+        let jar = build_jar(&[
+            (
+                "META-INF/mods.toml",
+                "[[mods]]\nmodId = \"modernfix\"\ndisplayName = \"ModernFix\"\nside = \"BOTH\"\n",
+            ),
+            (
+                "modernfix.mixins.json",
+                "{\"package\": \"com.example.mixin\"}\n",
+            ),
+        ]);
+        assert!(!super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_with_client_game_dependency_is_detected() {
+        // Entity Texture Features: `[[mods]]` has no `side`, but its `minecraft`
+        // and `forge` dependencies are `side = "CLIENT"`.
+        let jar = build_jar(&[(
+            "META-INF/mods.toml",
+            "[[mods]]\nmodId = \"entity_texture_features\"\ndisplayName = \"ETF\"\n\n\
+             [[dependencies.entity_texture_features]]\nmodId = \"forge\"\nmandatory = true\nversionRange = \"[33,)\"\nside = \"CLIENT\"\n\n\
+             [[dependencies.entity_texture_features]]\nmodId = \"minecraft\"\nmandatory = true\nversionRange = \"[1,)\"\nside = \"CLIENT\"\n",
+        )]);
+        assert!(super::is_client_only_forge_mod(&jar));
+    }
+
+    #[test]
+    fn forge_mod_with_both_game_dependency_is_not_client_only() {
+        let jar = build_jar(&[(
+            "META-INF/mods.toml",
+            "[[mods]]\nmodId = \"sodium\"\ndisplayName = \"Sodium\"\n\n\
+             [[dependencies.sodium]]\nmodId = \"minecraft\"\nversionRange = \"[1.20,)\"\n",
+        )]);
+        assert!(!super::is_client_only_forge_mod(&jar));
     }
 }

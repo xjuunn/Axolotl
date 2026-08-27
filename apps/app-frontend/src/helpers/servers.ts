@@ -56,6 +56,7 @@ export interface InstallModpackOptions {
 	jarUrl: string
 	jarFilename: string
 	jarSha1?: string
+	javaPath?: string
 	modpackProjectId?: string
 	modpackVersionId?: string
 	modpackTitle?: string
@@ -99,7 +100,11 @@ export const servers = {
 			expectedSha1,
 		}),
 	installModpack: (serverId: string, options: InstallModpackOptions) =>
-		invoke<void>(command('servers_install_modpack'), { serverId, ...options }),
+		invoke<void>(command('servers_install_modpack'), {
+			serverId,
+			...options,
+			javaPath: options.javaPath ?? null,
+		}),
 	installForge: (serverId: string, mcVersion: string, build: string, javaPath?: string) =>
 		invoke<void>(command('servers_install_forge'), { serverId, mcVersion, build, javaPath }),
 	start: (
